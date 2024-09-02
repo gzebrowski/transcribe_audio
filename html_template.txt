@@ -39,43 +39,16 @@
             min-width: 580px;
             padding-left: 1em;
         }
-        input[type=text] {
-            padding: 0.5em;
-            width: 100%%;
-            border-radius: 0.3em;
-        }
     </style>
 <script>
 %(jquery)s
 </script>
 <script>
-    function runYt(start) {
-        start = start || 0;
-        const url = $('#youtube_url').val();
-        let key = null;
-        if (url && url.match(/^https:\/\/(www\.youtube\.com|youtu\.be)\/[a-zA-Z0-9_.+=,#\/?&%%-]+$/)) {
-            key = url.match(/^https:\/\/[^\/]+\/embed\/([a-zA-Z0-9_.-]+)/);
-            key = key || url.match(/^https:\/\/[^?]+.*?[?&]v=([a-zA-Z0-9_.-]+)/);
-            key = (key) ? key[1] : null;
-        }
-        const src = (key) ? `http://www.youtube.com/embed/${key}&start=${start}` : '';
-        $('#main_iframe').attr('src', src).toggle(!!key);
-    }
     $(document).ready(() => {
         $('#show_timestamps').on('click', (ev) => {
             const isChecked = $(ev.target).is(':checked');
             $('body').toggleClass('show_timestamp', isChecked);
         });
-        $('.timestamp').on('click', (ev) => {
-            const el = $(ev.target);
-            alert(el.data('tm'));
-        });
-        $('#youtube_url').on('change', (evt) => {
-            runYt();
-            const el = $(ev.target);
-            const val = el.val();
-        });
-        runYt();
     });
 </script>
 
@@ -89,18 +62,8 @@
     </div>
     <div class="toolbox">
       <div class="form-row">
-         <iframe id="main_iframe" width="560" height="315" src="" frameborder="0" 
-                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                 title="YouTube video player"
-                 referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe> 
-      </div>
-      <div class="form-row">
-        <input type="text" id="youtube_url" placeholder="wprowadź adres filmu YT">
-      </div>
-      <div class="form-row">
         <label><input type="checkbox" id="show_timestamps"> Pokaż znaczniki czasu</label>
       </div>
-
     </div>
   </div>
 </body>
