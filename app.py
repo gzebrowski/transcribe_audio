@@ -1,7 +1,7 @@
 import json
 import re
-from io import BytesIO
 from hashlib import md5, sha1
+from io import BytesIO
 
 import streamlit as st
 from openai import OpenAI
@@ -11,6 +11,7 @@ from streamlit_player import st_player
 from streamlit_env import Env
 
 AUDIO_TRANSCRIBE_MODEL = "whisper-1"
+LLM_MODEL = 'gpt-4o-mini'
 MAX_SIZE = 25_000_000
 # MAX_SIZE = 250
 env = Env('.env')
@@ -70,6 +71,18 @@ def get_segment_lines(segments, pattern):
     return _html_lines
 
 
+def get_summary(_openai_client, long_text: str) -> str:
+    prompt2 = 'Wygeneruj streszczenie poniższej treści. '\
+              'Jeśli to możliwe, to streszczenie powinno być w formie wypunktowania głównych zagadnien zawartych '\
+              'w treści :\n\n'
+    prompt2 += long_text
+    response = _openai_client.chat.completions.create(model=LLM_MODEL, temperature=0, messages=[{
+        'role': 'user',
+        'content': [{'type': 'text', 'text': prompt2}],
+    }])
+    return response.choices[0].message.content
+
+
 @st.cache_resource
 def get_openai_client():
     return OpenAI(api_key=st.session_state.api_key)
@@ -93,7 +106,7 @@ if allowed_emails:
         can_process = True
 
 if not st.session_state.api_key:
-    api_key = st.text_input('Podaj Hasło', type='password')
+    api_key = st.text_input('Podaj klucz api', type='password')
     if api_key:
         hsh = env.get('PWD_HASH')
         salt = env.get('PWD_SALT')
@@ -105,13 +118,14 @@ if not st.session_state.api_key:
         st.rerun()
 else:
     f_key = f"k_{st.session_state['file_key']}"
-
     tab1, tab2 = st.tabs(['Przetwarzanie audio', 'prezentacja'])
+    html_lines = []
 
     with tab1:
         uploaded_file = st.file_uploader('Wczytaj plik mp3', type=['mp3'], accept_multiple_files=False, key=f_key,
                                          help='Max 25MB')
         fetch_word_timestamps = st.checkbox('Pobierz timestamp wszystkich wyrazów')
+        sumarize_text = st.checkbox('Utwórz streszczenie treści')
         if can_process and uploaded_file:
             bts = BytesIO(uploaded_file.getvalue()).getvalue()
             is_fine = len(bts) <= MAX_SIZE
@@ -122,13 +136,19 @@ else:
                     st.session_state.file_key = st.session_state['file_key'] + 1
                     st.rerun()
             else:
+                summary = ''
                 uploaded_filename = uploaded_file.name
                 file_hash = get_audio_hash(bts)
                 openai_client = get_openai_client()
                 if file_hash != st.session_state.file_hash:
                     st.session_state.file_hash = file_hash
                     st.session_state.uploaded_filename = uploaded_filename
-                    data = transcribe_audio(openai_client, bts, word_timestamp=fetch_word_timestamps)
+                    with st.spinner('Proszę czekać, przetwarzanie dźwięku'):
+                        data = transcribe_audio(openai_client, bts, word_timestamp=fetch_word_timestamps)
+                    summary = ''
+                    if sumarize_text:
+                        with st.spinner('Proszę czekać, tworzenie podsumowania'):
+                            summary = get_summary(openai_client, data[0])
                     for nr, k in enumerate(['text', 'words', 'segments']):
                         dt = data[nr]
                         if dt and k in store_keys and isinstance(dt, list) and isinstance(dt[0], dict):
@@ -136,13 +156,19 @@ else:
                         st.session_state[k] = dt
                 for k in ['text', 'words', 'segments']:
                     st.header(k)
-                    st.write(st.session_state[k])
+                    with st.container(height=200):
+                        st.write(st.session_state[k])
                     if st.session_state[k]:
                         ext = 'txt' if k == 'text' else 'json'
                         dt2store = json.dumps(st.session_state[k]) if k in [
                             'words', 'segments'] else str(st.session_state[k])
-                        st.download_button(label='Pobierz', data=dt2store,
+                        st.download_button(label=f'Pobierz {k}', data=dt2store,
                                            file_name=f'{st.session_state.uploaded_filename}_{k}.{ext}')
+                if summary:
+                    st.header('Streszczenie treści')
+                    with st.container(height=200):
+                        st.write(summary)
+
                 download_html = st.button('Spreparuj html', key=f'html_{f_key}', help='Pobierz tekst jako html')
                 if download_html:
                     p = '<p id="p_%(id)s" title="start: %(start2)s, end: %(end2)s" class="txt_line">'\
@@ -152,11 +178,11 @@ else:
                     html_lines = get_segment_lines(st.session_state['segments'], p)
                     jquery = open('jquery.js').read()
                     tpl = open('html_template.txt', encoding='utf8').read()
-                    full_html = tpl % {'title': st.session_state.uploaded_filename, 'body': '\n'.join(html_lines),
-                                    'jquery': jquery}
+                    full_html = tpl % {'title': st.session_state.uploaded_filename, 'jquery': jquery,
+                                       'body': '\n'.join([h['html'] for h in html_lines])}
                     st.download_button(label='Pobierz html', data=full_html,
                                        file_name=f'{st.session_state.uploaded_filename}.html')
-                
+
                 reset_all = st.button('Zresetuj', key=f'btn_{f_key}', type='primary',
                                       help='Umożliwia wczytanie innego pliku')
                 if reset_all:
@@ -185,17 +211,19 @@ else:
             with col1:
                 htm_p = '<p title="start: %(start2)s, end: %(end2)s">%(text)s</p>'
                 html_lines = get_segment_lines(st.session_state['segments'], htm_p)
-                for line in html_lines:
-                    write_html(line['html'])
-                    if yt_src:
-                        c_key = st.session_state['clicked']
-                        clicked[line['id']] = click_detector(
-                            f'''<a href="#" id="clck_{line['id']}">-&gt;</a>''',
-                            key=f"goto_{c_key}_{line['id']}")
-                        if clicked[line['id']]:
-                            st.session_state.clicked = st.session_state['clicked'] + 1
-                            set_video_offset(offset=line['time'])
-                            st.rerun()
+                with st.container(height=600):
+                    for line in html_lines:
+                        write_html(line['html'])
+                        if yt_src:
+                            c_key = st.session_state['clicked']
+                            clicked[line['id']] = click_detector(
+                                f'''<a href="#" id="clck_{line['id']}">-&gt;</a>''',
+                                key=f"goto_{c_key}_{line['id']}")
+                            if clicked[line['id']]:
+                                st.session_state.clicked = st.session_state['clicked'] + 1
+                                set_video_offset(offset=line['time'])
+                                st.rerun()
             with col2:
                 if yt_src:
-                    st_player(yt_src)
+                    kws = {'playing': True} if st.session_state.video_offset else {}
+                    st_player(yt_src, **kws)
